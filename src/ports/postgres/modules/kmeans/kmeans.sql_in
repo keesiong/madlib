@@ -3,7 +3,6 @@
  * @file kmeans.sql_in
  *
  * @brief Set of functions for k-means clustering.
- * @date Jan 2011, Nov 2011
  *
  * @sa For a brief introduction to k-means clustering, see the module
  *     description \ref grp_kmeans.
@@ -17,109 +16,95 @@ m4_include(`SQLCommon.m4')
 
 @about
 
-K-means clustering is one of several known methods to solve the NP-hard
-problem of grouping set of objects into \f$ \boldsymbol K \f$ clusters based 
-on some predefined proximity measure. 
+Clustering refers to the problem of partitioning a set of objects according to
+some problem-dependent measure of <em>similarity</em>. In the k-means variant,
+one is given \f$ n \f$ points \f$ x_1, \dots, x_n \in \mathbf R^d \f$, and the goal is
+to position \f$ k \f$ centroids \f$ c_1, \dots, c_k \in \mathbf R^d \f$ so that the sum of squared
+distances between each point and its closest centroid is minimized. (A cluster
+is identified by its centroid and consists of all points for which this
+centroid is closest.) Formally, we wish to minimize the following objective
+function:
+\f[
+    (c_1, \dots, c_k) \mapsto \sum_{i=1}^n \min_{j=1}^k \operatorname{dist}(x_i, c_j)^2
+\f]
 
-The standard k-means algorithm as proposed by Stuart Lloyd in 1957 [1] consists 
-of the following steps:
--# Initialize centroids.
+This problem is computationally difficult (NP-hard), yet the
+local-search heuristic proposed by Lloyd [4] performs reasonably well in
+practice. In fact, it is so ubiquitous today that it is
+often referred to as the <em>standard algorithm</em> or even just the
+<em>k-means algorithm</em> [1]. It works as follows:
+
+-# Seed the \f$ k \f$ centroids (see below)
 -# Repeat until convergence:
- -# Assign the closest centroid to each data point.
- -# Recalculate the position of each centroid based on the current points 
-   assigned to it.
+ -# Assign each point to its closest centroid
+ -# Move each centroid to the barycenter (mean) of all points currently
+    assigned to it
 -# Convergence is achieved when no points change their assignments during step 2a.
 
-By repeating the above sequence of steps (until none of the points change their
-centroid assignment) we can arrive at a local optimum for the objective 
-function, usually represented by the sum of squared errors (\f$ SSE \f$). Errors 
-are measured using the predefined distance or similarity metric between all points
-and centroids assigned to them. Some common proximity metrics are Euclidean 
-and Manhattan distance (used mostly for spacial data) or angle based metrics 
-like Cosine similarity (often used for text analysis).
-
-Both input data (\f$ \boldsymbol x_i, i \in {1..n} \f$) and cluster prototypes 
-(centroids) (\f$ \boldsymbol c_j, j \in {1..K} \f$) are usually represented as 
-points in n-dimensional space. If we denote the proximity measure 
-as \f$ dist(\boldsymbol x_i, \boldsymbol x_j) \f$, and the set of all points 
-belonging to \f$ i-th \f$ cluster as \f$ C_i \f$then the \f$ SSE \f$ objective  
-function can be described as:
-\f[
-    SSE = \sum_{i=1}^K \sum_{x\in{C_i}} dist(c_i, x)
-    \,.
-\f]
+This algorithm is guaranteed to converge to a local optimum, as it can be 
+shown that the objective function decreases in every step.
 
 @implementation
 
-Individual input data points and initial centroids (if used) should be stored 
-in separate rows and their column can be one of the following data types: 
-SVEC, FLOAT[], INTEGER[]. Although internally k-means code will convert
-this input data into SVEC type for processing. All input data points with 
-missing (NULL) dimensions will be skipped during analysis.
+Data points and predefined centroids (if used) are expected to be stored row-wise,
+in a column of type <tt>\ref grp_svec "SVEC"</tt> (or any type convertible to
+<tt>\ref grp_svec "SVEC"</tt>, like <tt>FLOAT[]</tt> or <tt>INTEGER[]</tt>).
+Data points with with non-finite values (NULL, NaN, infinity) in any component
+will be skipped during analysis.
 
-The following methods are currently available for centroid initialization step:
+The following methods are available for the centroid seeding:
  - <strong>random selection</strong>: 
-   will generate \f$ \boldsymbol K \f$ centroids selected at random
-   from all the input points. Parameter \f$ \boldsymbol K \f$ is required.
- - <strong>kmeans++ algorithm</strong>:
-   improves the initial centroid selection by trying to spread it 
-   across the whole data set space. This is achieved by increasing the selection
-   chance for points which are further away from the current centroid set [2]. 
-   Kmeans++ also requires \f$ \boldsymbol K \f$ parameter to specify the number 
-   of centroids to generate. For performance reasons the sample size to run
-   this seeding approach on can be specified as percent of all input points 
-   (default: 1%).
- - <strong>canopy clustering</strong>:
-   is a common method for fast clustering, which does not require number of
-   clusters \f$ \boldsymbol K \f$ as input [4]. On its own it does not stand out
-   as particularly effective clustering technique but lends itself very well as 
-   a good seeding approach for k-means clustering. There are two threshold
-   values required by canopy clustering, which can be provided by the user
-   or auto-generated. If the thresholds are not provided they will be selected 
-   in the following way:
-    - \f$ \boldsymbol n \f$ percent of points is selected at random 
-      (default: 1%),
-    - distances \f$ \boldsymbol d \f$ between all above points are calculated, 
-      yielding \f$ \frac{n * (n-1)}{2} \f$ individual distance measures,
-    - T1 threshold is set to the 10th quantile and the T2 threshold is set to 
-      the 90th quantile of the distance distribution.
- - <strong>predefined set of centroids</strong>:
-   optionally you can provide a set of centroids stored in a table, which will
-   be used as the initial set.
+   Select \f$ k \f$ centroids randomly among the input points.
+ - <strong>kmeans++</strong> [2]:
+   Start with a single centroid chosen randomly among the input points. Then
+   iteratively choose new
+   centroids from the input points until there is a total of \f$ k \f$
+   centroids. The probability for picking a particular point is proportional to
+   its minimum squared distance to any existing centroid.
+   \n
+   Intuitively, kmeans++ favors seedings where centroids are spread out over the
+   whole range of the input points, while at the same time not being too
+   susceptible to outliers [2].
+   For performance reasons, if the input size is large, the kmeans++
+   initialization should only be run on a random sample of the input points. The
+   sample size can be specified as a fraction of all input points 
+   (default: 0.01).
+ - <strong>user-specified set of initial centroids</strong>:
+   See below for a description of the expected format of the set of initial
+   centroids.
 
-Currently available proximity metrics and (in parenthesis) their corresponding 
-centroid update methods are:
+The following distance functions can be used (computation of barycenter/mean in parentheses):
  - <strong>l1norm/Manhattan</strong> (element-wise mean)
  - <strong>l2norm/Euclidean</strong> (element-wise mean)
  - <strong>cosine</strong> (element-wise mean of normalized points)
  - <strong>tanimoto</strong> (element-wise mean of normalized points)
 
 The algorithm stops when one of the following conditions is met:
- - fraction of updated points is smaller than convergence threshold (default: 0.001)
- - algorithm reached the maximum number of allowed iterations (default: 20)
+ - The fraction of updated points is smaller than convergence threshold (default: 0.001).
+ - The algorithm reached the maximum number of allowed iterations (default: 20).
 
-The quality of the derived centroid set can be evaluated using the simplified
-silhouette coefficient [3] and the value of the cost function. Since for large 
-data sets this computation may be quite expensive it is off by default 
-(evaluate = False).
+A popular method to assess the quality of the clustering is the
+<em>silhouette coefficient</em>, a simplified version of which can be computed
+optionally [3]. Since for large data sets this computation is expensive, it is
+turned off by default (evaluate = False).
 
 @input
 The <strong>source relation</strong> is expected to be of the following form:
 <pre>{TABLE|VIEW} <em>data_points</em> (
     ...
-    <em>point_id</em> (optional) INTEGER,
-    <em>point_coordinates</em> SVEC | FLOAT[] | INTEGER[],
+    [ <em>point_id</em> INTEGER, ]
+    <em>point_coordinates</em> {SVEC|FLOAT[]|INTEGER[]},
     ...
 )</pre>
 where:
  - <em>point_id</em> is the name of an optional column with a unique ID of the data point
  - <em>point_coordinates</em> is the name of a column with point coordinates 
 
-If kmeans function is called with the provided set of initial centroids, the 
-centroid relation expected to be of the following form:
+If kmeans is called with a set of initial centroids, the 
+centroid relation is expected to be of the following form:
 <pre>{TABLE|VIEW} <em>initial_centroids</em> (
     ...
-    <em>centroid_coordinates</em> SVEC | FLOAT[] | INTEGER[],
+    <em>centroid_coordinates</em> {SVEC|FLOAT[]|INTEGER[]},
     ...
 )</pre>
 where:
@@ -129,46 +114,35 @@ where:
 The k-means algorithm can be invoked in four possible ways:
 
 - using <em>random</em> centroid seeding method for a 
-provided \f$ \boldsymbol K \f$:
-<pre>SELECT * FROM \ref kmeans(
-  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
-  , 'random', <em>k</em>
-  , '<em>dist_metric</em>', <em>max_iter</em>
-  , <em>conv_threshold</em>, <em>evaluate</em>
-  , '<em>out_points</em>', '<em>out_centroids</em>'
-  , <em>overwrite</em>, <em>verbose</em>
+provided \f$ k \f$:
+<pre>SELECT * FROM \ref kmeans_random(
+  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+  '<em>out_points</em>', '<em>out_centroids</em>',
+  '<em>dist_metric</em>',
+  <em>max_iter</em>, <em>conv_threshold</em>,
+  <em>evaluate</em>, <em>verbose</em>,
+  <em>k</em>
 );</pre>
 
 - using <em>kmeans++</em> centroid seeding method for a 
-provided \f$ \boldsymbol K \f$:
-<pre>SELECT * FROM \ref kmeans(
-  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
-  , 'kmeans++', <em>init_sample_pct</em>, <em>k</em>
-  , '<em>dist_metric</em>', <em>max_iter</em>
-  , <em>conv_threshold</em>, <em>evaluate</em>
-  , '<em>out_points</em>', '<em>out_centroids</em>'
-  , <em>overwrite</em>, <em>verbose</em>
-);</pre>
-
-- using <em>canopy clustering</em> as the centroid seeding method with optionally
-provided thresholds <em>t1</em> and <em>t2</em>:
-<pre>SELECT * FROM \ref kmeans(
-  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
-  , 'canopy', <em>t1</em>, <em>t2</em>
-  , '<em>dist_metric</em>', <em>max_iter</em>
-  , <em>conv_threshold</em>, <em>evaluate</em>
-  , '<em>out_points</em>', '<em>out_centroids</em>'
-  , <em>overwrite</em>, <em>verbose</em>
+provided \f$ k \f$:
+<pre>SELECT * FROM \ref kmeans_plusplus(
+  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+  '<em>out_points</em>', '<em>out_centroids</em>',
+  '<em>dist_metric</em>',
+  <em>max_iter</em>, <em>conv_threshold</em>,
+  <em>evaluate</em>, <em>verbose</em>,
+  <em>k</em>, <em>sample_frac</em>
 );</pre>
 
 - with a provided centroid set:
-<pre>SELECT * FROM \ref kmeans(
-  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
-  , <em>init_cset_rel</em>, '<em>init_cset_col</em>'
-  , '<em>dist_metric</em>', <em>max_iter</em>
-  , <em>conv_threshold</em>, <em>evaluate</em>
-  , '<em>out_points</em>', '<em>out_centroids</em>'
-  , <em>overwrite</em>, <em>verbose</em>
+<pre>SELECT * FROM \ref kmeans_cset(
+  '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+  '<em>out_points</em>', '<em>out_centroids</em>',
+  '<em>dist_metric</em>',
+  <em>max_iter</em>, <em>conv_threshold</em>,
+  <em>evaluate</em>, <em>verbose</em>,
+  '<em>init_cset_rel</em>', '<em>init_cset_col</em>'
 );</pre>
 
 The output centroid set will be stored in the <tt>out_centroids</tt> table 
@@ -176,7 +150,7 @@ with the following structure:
 <pre>
  cid |  coords                   
 -----+-------------
-...
+        ...
 </pre>
 
 The cluster assignments for each data point will be stored in the
@@ -184,19 +158,13 @@ The cluster assignments for each data point will be stored in the
 <pre>
  pid |  coords  | cid 
 -----+----------+-----
-...
+         ...
 </pre>
 
 @examp
 
--#  Prepare some input data. You can use the \ref kmeans_sample_data() function
-to create a sample data set:
+-#  Prepare some input data.
 \code
-sql> SELECT * FROM madlib.kmeans_sample_data( 2, 10, 1000, 100, 10, 'public.km_sample');
- kmeans_sample_data 
---------------------
- public.km_sample
-
 sql> SELECT * FROM public.km_sample LIMIT 5;
           coords          
 --------------------------
@@ -210,15 +178,19 @@ sql> SELECT * FROM public.km_sample LIMIT 5;
 -#  Run k-means clustering using kmeans++ for centroid seeding
 (below example is executed in Verbose mode):
 \code
-sql> SELECT * FROM madlib.kmeans( 
-    'public.km_sample', 'coords', null, 'kmeans++', 10
-    , 'l2norm', 10, 0.001, True, 'public.km_p', 'public.km_c', True, True
+sql> SELECT * FROM madlib.kmeans_plusplus( 
+    'km_sample', 'coords', null,
+    'km_p', 'km_c',
+    'l2norm',
+    10, 0.001,
+    True, True,
+    10, null
 );
 INFO:  ('Started k-means clustering with parameters:',)
 INFO:  (' * src_relation = public.km_sample',)
 INFO:  (' * src_col_data = coords',)
 INFO:  (' * src_col_id = None (will be auto-generated)',)
-INFO:  (' * init_method = kmeans++ (using full data set)',)
+INFO:  (' * init_method = kmeans++ (sample=0.01)',)
 INFO:  (' * initial k = 10',)
 INFO:  (' * dist_metric = l2norm',)
 INFO:  (' * evaluate = True (model coefficient evaluation)',)
@@ -229,33 +201,34 @@ INFO:  ('Input:',)
 INFO:  ('... analyzing data points',)
 INFO:  (' * points: 10000 (2 dimensions), kept 10000 after removing NULLs',)
 INFO:  ('... generating initial centroids',)
-INFO:  (' * centroids: 10 seeded using kmeans++ (0.448 sec)',)
+INFO:  (' * centroids: 10 seeded using kmeans++ (0.351 sec)',)
 INFO:  ('Execution:',)
-INFO:  ('... Iteration 1: updated 10000 points (0.287 sec)',)
-INFO:  ('... Iteration 2: updated 544 points (0.463 sec)',)
-INFO:  ('... Iteration 3: updated 366 points (0.286 sec)',)
-INFO:  ('... Iteration 4: updated 208 points (0.278 sec)',)
-INFO:  ('... Iteration 5: updated 76 points (0.338 sec)',)
-INFO:  ('... Iteration 6: updated 36 points (0.359 sec)',)
-INFO:  ('... Iteration 7: updated 13 points (0.293 sec)',)
-INFO:  ('... Iteration 8: updated 3 points (0.343 sec)',)
-INFO:  ('Exit condition: fraction of reassigned nodes is smaller than: 0.001',)
+INFO:  ('... Iteration 1: updated 10000 points (0.212 sec)',)
+INFO:  ('... Iteration 2: updated 136 points (0.399 sec)',)
+INFO:  ('... Iteration 3: updated 74 points (0.2 sec)',)
+INFO:  ('... Iteration 4: updated 58 points (0.28 sec)',)
+INFO:  ('... Iteration 5: updated 66 points (0.261 sec)',)
+INFO:  ('... Iteration 6: updated 51 points (0.248 sec)',)
+INFO:  ('... Iteration 7: updated 36 points (0.257 sec)',)
+INFO:  ('... Iteration 8: updated 23 points (0.255 sec)',)
+INFO:  ('... Iteration 9: updated 21 points (0.31 sec)',)
+INFO:  ('... Iteration 10: updated 13 points (0.25 sec)',)
+INFO:  ('Exit condition: reached maximum number of iterations = 10',)
 INFO:  ('Writing final output table: public.km_p...',)
-INFO:  ('... 0.019 sec',)
+INFO:  ('... 0.033 sec',)
 INFO:  ('Calculating model cost function and simplified Silhouette coefficient...',)
 INFO:  ('... 0.121 sec',)
 -[ RECORD 1 ]-+-----------------
-src_relation  | public.km_sample
+src_relation  | km_sample
 point_count   | 10000
 init_method   | kmeans++
-init_k        | 10
+k             | 10
 dist_metric   | l2norm
-iterations    | 8
-final_k       | 10
-cost_func     | 37728.9381965
-silhouette    | 0.729328318109
-out_points    | public.km_p
-out_centorids | public.km_c               
+iterations    | 10
+cost_func     | 36424.9019377
+silhouette    | 0.710664950775
+out_points    | km_p
+out_centorids | km_c              
 \endcode
 
 @literature
@@ -263,16 +236,19 @@ out_centorids | public.km_c
 [1] Wikipedia, K-means Clustering,
     http://en.wikipedia.org/wiki/K-means_clustering
 
-[2] Wikipedia, K-means++,
-    http://en.wikipedia.org/wiki/K-means%2B%2B
+[2] David Arthur, Sergei Vassilvitskii: k-means++: the advantages of careful
+    seeding, Proceedings of the 18th Annual ACM-SIAM Symposium on Discrete
+    Algorithms (SODA'07), pp. 1027-1035,
+    http://www.stanford.edu/~darthur/kMeansPlusPlus.pdf
 
-[3] Omnia Ossama, Hoda M. O. Mokhtar, Mohamed E. El-Sharkawi: Clustering Moving 
-    Objects Using Segments Slopes, pp. 43, 
-    http://airccse.org/journal/ijdms/papers/3111ijdms03.pdf	
+[3] E. R. Hruschka, L. N. C. Silva, R. J. G. B. Campello: Clustering
+    Gene-Expression Data: A Hybrid Approach that Iterates Between k-Means and
+    Evolutionary Search. In: Studies in Computational Intelligence - Hybrid
+    Evolutionary Algorithms. pp. 313-335. Springer. 2007.
     
-[4] Andrew McCallum, Kamal Nigam, Lyle H. Ungar: Efﬁcient Clustering of
-    High-Dimensional Data Sets with Application to Reference Matching
-    http://www.kamalnigam.com/papers/canopy-kdd00.pdf
+[4] Lloyd, Stuart: Least squares quantization in PCM. Technical Note, Bell
+    Laboratories. Published much later in: IEEE Transactions on Information
+    Theory 28(2), pp. 128-137. 1982.
 
 @sa File kmeans.sql_in documenting the SQL functions.
 
@@ -283,243 +259,66 @@ out_centorids | public.km_c
 
 /**
  * @internal
- * @brief Centroid assignment function. It computes distances between
- * a point and an array of centroids and returns the ID of the nearest centroid.
+ * @brief Given a point, find all canopies that are closer than threshold
+ * @param point The point
+ * @param allCanopies Array of canopies
+ * @param threshold Threshold distance below which a point is included in the
+ *     output array
+ * @param distMetric ID of the metric to use
+ * @return Array of positions in \c allCanopies that are close to the given
+ *     point
  */
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_kmeans_closest_centroid( 
-    p_point         MADLIB_SCHEMA.SVEC
-    , p_cids        INTEGER[]
-    , p_ccoords     MADLIB_SCHEMA.SVEC[]
-    , p_dist_metric TEXT
-) 
-RETURNS INTEGER
-AS $$
-DECLARE
-    min_cid         INTEGER := 0;
-    min_val         FLOAT := NULL;
-    temp_val        FLOAT := NULL;
-BEGIN
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_get_array_of_close_canopies( 
+    "point"               MADLIB_SCHEMA.SVEC,
+    "allCanopies"         MADLIB_SCHEMA.SVEC[],
+    "threshold"           FLOAT8,
+    "dist_metric"         INTEGER
+)
+RETURNS INTEGER[] AS
+'MODULE_PATHNAME'
+LANGUAGE c
+IMMUTABLE
+STRICT;
 
-    --
-    -- Pick your distance metrics and Loop over all centroids
-    --
-    -- Implementation comment:
-    -- IF statement is outside the loop in order to have a static SQL call to
-    -- the distance function and to minimize the number of comparisons of P_DIST_METRIC. 
-    -- Static SQL is better because we avoid SVEC parameters serialization, that
-    -- would be necessary with .
-    IF p_dist_metric = 'l1norm' THEN
-        FOR i IN 1..array_upper( p_cids, 1) LOOP        
-            temp_val := MADLIB_SCHEMA.l1norm( p_point, p_ccoords[p_cids[i]]);
-            IF ( temp_val < coalesce( min_val, temp_val + 1.0) ) THEN
-                min_val := temp_val;
-                min_cid := p_cids[i];
-            END IF;
-        END LOOP;
-    ELSIF p_dist_metric = 'l2norm' THEN
-        FOR i IN 1..array_upper( p_cids, 1) LOOP        
-            temp_val := MADLIB_SCHEMA.l2norm( p_point, p_ccoords[p_cids[i]]);
-            IF ( temp_val < coalesce( min_val, temp_val + 1.0) ) THEN
-                min_val := temp_val;
-                min_cid := p_cids[i];
-            END IF;
-        END LOOP;
-    ELSIF p_dist_metric = 'cosine' THEN
-        FOR i IN 1..array_upper( p_cids, 1) LOOP        
-            temp_val := acos( MADLIB_SCHEMA.cosine_distance( p_point, p_ccoords[p_cids[i]]));
-            IF ( temp_val < coalesce( min_val, temp_val + 1.0) ) THEN
-                min_val := temp_val;
-                min_cid := p_cids[i];
-            END IF;
-        END LOOP;
-    ELSIF p_dist_metric = 'tanimoto' THEN
-        FOR i IN 1..array_upper( p_cids, 1) LOOP        
-            temp_val := acos( MADLIB_SCHEMA.tanimoto_distance( p_point, p_ccoords[p_cids[i]]));
-            IF ( temp_val < coalesce( min_val, temp_val + 1.0) ) THEN
-                min_val := temp_val;
-                min_cid := p_cids[i];
-            END IF;
-        END LOOP;
-    ELSE
-        RAISE EXCEPTION 'Unknown distance metric: %', p_dist_metric;
-    END IF;            
-    
-    RETURN min_cid;
-END
-$$ LANGUAGE plpgsql IMMUTABLE;
 
 /**
  * @internal
- * @brief State variable data type for kmeans_canopy() 
+ * @brief Given a point, find the closest centroid
+ * @param point The point
+ * @param closeCentroids List of positions in the \c centroidCoordinates array
+ *     that should be considered. The distance to all other centroids is
+ *     conceptually infinity. If NULL, then all centroids in
+ *     \c centroidCoordinates are considered.
+ * @param centroidCoordinates Array of centroids
+ * @param distMetric ID of the metric to use
+ * @return The position in \c centroidCoordinates that is closest to \c point
  */
-CREATE TYPE MADLIB_SCHEMA.kmeans_canopy_type AS(
-    canopy_coords   MADLIB_SCHEMA.svec[]    -- coordinates of all canopies
-    , dist_metric   TEXT                    -- distance metric
-    , threshold     FLOAT                   -- threshold
-);
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_kmeans_closest_centroid( 
+    "point"               MADLIB_SCHEMA.SVEC,
+    "closeCentroids"      INTEGER[],
+    "centroidCoordinates" MADLIB_SCHEMA.SVEC[],
+    "dist_metric"         INTEGER
+)
+RETURNS INTEGER AS
+'MODULE_PATHNAME'
+LANGUAGE c
+IMMUTABLE; /* This function must *not* be declared STRICT! */
 
 /**
  * @internal
  * @brief Transition function for UDA:kmeans_canopy() 
  */
 CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_kmeans_canopy_transition(
-    state           MADLIB_SCHEMA.kmeans_canopy_type
+    state           MADLIB_SCHEMA.svec[]
     , pcoords       MADLIB_SCHEMA.svec
-    , dist_metric   TEXT
-    , threshold     FLOAT
+    , dist_metric   INTEGER
+    , threshold     FLOAT8
 )
-RETURNS MADLIB_SCHEMA.kmeans_canopy_type 
-AS $$
-DECLARE 
-    i INTEGER;
-    distance FLOAT;
-BEGIN
-    -- Populate the initial state 
-    IF state is NULL THEN
-       state := ROW( ARRAY[pcoords]::MADLIB_SCHEMA.svec[], dist_metric, threshold);
-       RETURN state;
-    END IF;
-    -- If the new point falls under any existing canopy >> just move on & return current state
-    IF dist_metric = 'l1norm' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state.canopy_coords, 1) LOOP
-            distance := MADLIB_SCHEMA.l1norm( pcoords, state.canopy_coords[i]);
-            IF(distance < threshold) THEN
-                RETURN state;
-            END IF;
-        END LOOP;
-    ELSIF dist_metric = 'l2norm' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state.canopy_coords, 1) LOOP
-            distance := MADLIB_SCHEMA.l2norm( pcoords, state.canopy_coords[i]);
-            IF(distance < threshold) THEN
-                RETURN state;
-            END IF;
-        END LOOP;
-    ELSIF dist_metric = 'cosine' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state.canopy_coords, 1) LOOP
-            distance := acos( MADLIB_SCHEMA.cosine_distance( pcoords, state.canopy_coords[i]));
-            IF(distance < threshold) THEN
-                RETURN state;
-            END IF;
-        END LOOP;
-    ELSIF dist_metric = 'tanimoto' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state.canopy_coords, 1) LOOP
-            distance := acos( MADLIB_SCHEMA.tanimoto_distance( pcoords, state.canopy_coords[i]));
-            IF(distance < threshold) THEN
-                RETURN state;
-            END IF;
-        END LOOP;
-    ELSE
-        RAISE EXCEPTION 'Unknown distance metric: %', dist_metric;
-    END IF;     
-    -- If the new point does not fall under any existing canopy 
-    -- >> add it to the list of canopies
-    state.canopy_coords := ARRAY_APPEND(state.canopy_coords, pcoords);
-    RETURN state;
-END;
-$$ LANGUAGE plpgsql;
-
-/**
- * @internal
- * @brief Merge function for UDA:kmeans_canopy() 
- */
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_kmeans_canopy_merge(
-    state1      MADLIB_SCHEMA.kmeans_canopy_type
-    , state2    MADLIB_SCHEMA.kmeans_canopy_type
-)
-RETURNS MADLIB_SCHEMA.kmeans_canopy_type 
-AS $$
-DECLARE 
-    i INTEGER;
-    j INTEGER;
-    overlap BOOLEAN;
-    distance DOUBLE PRECISION;
-BEGIN
-    -- If one side is NULL
-    IF ARRAY_UPPER(state1.canopy_coords, 1) IS NULL THEN
-       RETURN state2;
-    END IF;
-    IF ARRAY_UPPER(state2.canopy_coords, 1) IS NULL THEN
-       RETURN state1;
-    END IF;
-    -- Compare all canopies from both states and find overlaps (< 0.5 * threshold)
-    -- Keep track of the new state in STATE2
-    IF state1.dist_metric = 'l1norm' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state1.canopy_coords, 1) LOOP
-            overlap := FALSE;
-            FOR j IN 1 .. ARRAY_UPPER(state2.canopy_coords, 1) LOOP
-                distance := MADLIB_SCHEMA.l1norm(state1.canopy_coords[i], state2.canopy_coords[j]);
-                IF (distance < 0.5 * state1.threshold) THEN
-                    overlap := TRUE;
-                    EXIT;
-                END IF;
-            END LOOP;
-            IF overlap = FALSE THEN
-                state2.canopy_coords := ARRAY_APPEND(state2.canopy_coords, state1.canopy_coords[i]);
-            END IF;
-        END LOOP;
-    ELSIF state1.dist_metric = 'l2norm' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state1.canopy_coords, 1) LOOP
-            overlap := FALSE;
-            FOR j IN 1 .. ARRAY_UPPER(state2.canopy_coords, 1) LOOP
-                distance := MADLIB_SCHEMA.l2norm(state1.canopy_coords[i], state2.canopy_coords[j]);
-                IF (distance < 0.5 * state1.threshold) THEN
-                    overlap := TRUE;
-                    EXIT;
-                END IF;
-            END LOOP;
-            IF overlap = FALSE THEN
-                state2.canopy_coords := ARRAY_APPEND(state2.canopy_coords, state1.canopy_coords[i]);
-            END IF;
-        END LOOP;
-    ELSIF state1.dist_metric = 'cosine' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state1.canopy_coords, 1) LOOP
-            overlap := FALSE;
-            FOR j IN 1 .. ARRAY_UPPER(state2.canopy_coords, 1) LOOP
-                distance := acos( MADLIB_SCHEMA.cosine_distance( state1.canopy_coords[i], state2.canopy_coords[j]));
-                IF (distance < 0.5 * state1.threshold) THEN
-                    overlap := TRUE;
-                    EXIT;
-                END IF;
-            END LOOP;
-            IF overlap = FALSE THEN
-                state2.canopy_coords := ARRAY_APPEND(state2.canopy_coords, state1.canopy_coords[i]);
-            END IF;
-        END LOOP;
-    ELSIF state1.dist_metric = 'tanimoto' THEN
-        FOR i IN 1 .. ARRAY_UPPER(state1.canopy_coords, 1) LOOP
-            overlap := FALSE;
-            FOR j IN 1 .. ARRAY_UPPER(state2.canopy_coords, 1) LOOP
-                distance := acos( MADLIB_SCHEMA.tanimoto_distance( state1.canopy_coords[i], state2.canopy_coords[j]));
-                IF (distance < 0.5 * state1.threshold) THEN
-                    overlap := TRUE;
-                    EXIT;
-                END IF;
-            END LOOP;
-            IF overlap = FALSE THEN
-                state2.canopy_coords := ARRAY_APPEND(state2.canopy_coords, state1.canopy_coords[i]);
-            END IF;
-        END LOOP;
-    ELSE
-        RAISE EXCEPTION 'Unknown distance metric: %', state1.dist_metric;
-    END IF;       -- Done
-    RETURN state2;
-END;
-$$ LANGUAGE plpgsql;
-
-/**
- * @internal
- * @brief Finalize function for UDA:kmeans_canopy() 
- */
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_kmeans_canopy_finalize(
-    state MADLIB_SCHEMA.kmeans_canopy_type
-)
-RETURNS MADLIB_SCHEMA.svec[] 
-AS $$
-DECLARE 
-BEGIN
-    RETURN state.canopy_coords;
-END;
-$$ LANGUAGE plpgsql;
+RETURNS MADLIB_SCHEMA.svec[] AS 
+'MODULE_PATHNAME'
+LANGUAGE c
+IMMUTABLE
+STRICT;
 
 /**
  * @internal
@@ -527,15 +326,37 @@ $$ LANGUAGE plpgsql;
  */
 CREATE AGGREGATE MADLIB_SCHEMA.kmeans_canopy(
     MADLIB_SCHEMA.svec  -- new point coordinates
-    , TEXT              -- distance metric
-    , FLOAT             -- threshold (T1)
-) 
-(
-    STYPE = MADLIB_SCHEMA.kmeans_canopy_type
-    , SFUNC = MADLIB_SCHEMA.internal_kmeans_canopy_transition
-    m4_ifdef(`GREENPLUM',`,prefunc = MADLIB_SCHEMA.internal_kmeans_canopy_merge')
-    , FINALFUNC = MADLIB_SCHEMA.internal_kmeans_canopy_finalize  
+    , INTEGER           -- distance metric
+    , FLOAT8            -- threshold (T1)
+) (
+    stype = MADLIB_SCHEMA.svec[],
+    sfunc = MADLIB_SCHEMA.internal_kmeans_canopy_transition,
+m4_ifdef(`__GREENPLUM__', `
+    prefunc = array_cat,
+')
+    initcond = '{}'
 );
+
+/**
+ * @internal
+ * @brief After merging canopies, remove those that are close to each other.
+ *    This is essentilly a pivoted version of kmeans_canopy
+ *
+ * @param all_canopies The array of all canopies (their coordinates)
+ * @param dist_metric ID of the metric to use
+ * @param threshold The threshold distance below which we drop canopies
+ * @returns The pruned array of canopies
+ */
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.internal_remove_close_canopies(
+    "all_canopies"  MADLIB_SCHEMA.svec[],
+    "dist_metric"   INTEGER,
+    "threshold"     FLOAT8
+)
+RETURNS MADLIB_SCHEMA.svec[] AS 
+'MODULE_PATHNAME'
+LANGUAGE c
+IMMUTABLE
+STRICT;
 
 /**
  * @internal
@@ -545,10 +366,9 @@ CREATE TYPE MADLIB_SCHEMA.kmeans_result AS (
     src_relation    TEXT,
     point_count     BIGINT,
     init_method     TEXT,
-    init_k          INT,
+    k               INT,
     dist_metric     TEXT,
     iterations      INT,
-    final_k         INT,
     cost_func       FLOAT,
     silhouette      FLOAT,
     out_points      TEXT,
@@ -557,80 +377,74 @@ CREATE TYPE MADLIB_SCHEMA.kmeans_result AS (
  
 /**
  * @brief Computes k-means clustering with user provided initial centroid set. 
- * 
- * For k-means clustering with automated centroid seeding see the other kmeans
- * signature.
  *
  * @param src_relation Name of the relation containing input data 
  * @param src_col_data Name of the column containing the point coordinates 
- *        (acceptable types: SVEC, INTEGER[], FLOAT[])
+ *        (acceptable types: <tt>\ref grp_svec "SVEC"</tt>, <tt>INTEGER[]</tt>,
+ *        <tt>FLOAT[]</tt>)
  * @param src_col_id Name of the column containing the unique point identifiers 
  *        (optional)
+ * @param out_points Name of the output relation for point/centroids assignments
+ * @param out_centroids Name of the output relation for the list of centroids 
+ * @param dist_metric Name of the metric to use for distance calculation, 
+ *        available options are: <tt>'euclidean'</tt>/<tt>'l2norm'</tt>,
+ *        <tt>'manhattan'</tt>/<tt>'l1norm'</tt>, <tt>'cosine</tt>,
+ *        <tt>'tanimoto'</tt>
+ * @param max_iter Maximum number of iterations 
+ * @param conv_threshold Convergence threshold expressed as fraction of points
+ *        that changed centroid assignment
+ * @param evaluate Calculate model evaluation coefficient
+ * @param verbose Generate detailed information during execution
  * @param init_cset_rel Name of the relation containing the initial set of 
  *        centroids
  * @param init_cset_col Name of the column containing the coordinates
- *        (acceptable types: SVEC, INTEGER[], FLOAT[])
- * @param dist_metric Name of the metric to use for distance calculation, 
- *        available options are: euclidean/l2norm, manhattan/l1norm, cosine,
- *        tanimoto
- * @param max_iter Maximum number of iterations 
- * @param conv_threshold Convergence threshold expressed as percentage of points
- *        that changed centroid assignment
- * @param evaluate Calculate model evaluation coefficient (BOOLEAN)
- * @param out_points Name of the output relation for point/centroids assignments
- * @param out_centroids Name of the output relation for the list of centroids 
- * @param overwrite Overwrite target relations if they exist (BOOLEAN)
- * @param verbose Generate detailed information during execution (BOOLEAN)
+ *        (acceptable types: <tt>\ref grp_svec "SVEC"</tt>, <tt>INTEGER[]</tt>,
+ *        <tt>FLOAT[]</tt>)
  * 
  * @return A composite value:
  *  - <tt>src_relation TEXT</tt> - name of the source relation,
  *  - <tt>point_count BIGINT</tt> - number of analyzed data points \f$ \boldsymbol n \f$
- *  - <tt>init_method TEXT</tt> - centroid seeding method used, available values:
- *    random, kmeans++, canopy, 'provided set'
- *  - <tt>init_k INTEGER</tt> - initial number of centroids, \f$ \boldsymbol k \f$
- *  - <tt>dist_metric TEXT</tt> - distance metric used, available values:
- *    l1norm, l2norm, cosine, tanimoto
+ *  - <tt>init_method TEXT</tt> - centroid seeding method used: one of
+ *    <tt>'random'</tt>, <tt>'kmeans++'</tt>, 
+ *    <tt>'provided set'</tt>
+ *  - <tt>k INTEGER</tt> - initial number of centroids, \f$ k \f$
+ *  - <tt>dist_metric TEXT</tt> - distance metric used: one of
+ *    <tt>'l1norm'</tt>, <tt>'l2norm'</tt>, <tt>'cosine'</tt>, <tt>'tanimoto'</tt>
  *  - <tt>iterations INTEGER</tt> - number of iterations executed,
- *  - <tt>final_k INTEGER</tt> - final number of centroids, may be smaller than 
- *    initial \f$ \boldsymbol k \f$ 
  *  - <tt>cost_func FLOAT</tt> - Cost function value for the model
  *  - <tt>silhouette FLOAT</tt> - Silhouette coefficient of the full model
  *  - <tt>out_points FLOAT</tt> - name of the output relation for data points
  *  - <tt>out_centroids FLOAT</tt> - name of the output relation for centroids
-
  * 
  * @usage
  *  - Run k-means clustering with a provided centroid set:
- *    <pre>SELECT * FROM kmeans(
- *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
- *      , '<em>init_cset_rel</em>', '<em>init_cset_col</em>'
- *      , '<em>dist_metric</em>', <em>max_iter</em>
- *      , <em>conv_threshold</em>, <em>evaluate</em>
- *      , '<em>out_points</em>', '<em>out_centroids</em>'
- *      , <em>overwrite</em>, <em>verbose</em>
+ *    <pre>SELECT * FROM kmeans_cset(
+ *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+ *      '<em>out_points</em>', '<em>out_centroids</em>',
+ *      '<em>dist_metric</em>',
+ *      <em>max_iter</em>, <em>conv_threshold</em>,
+ *      <em>evaluate</em>, <em>verbose</em>,
+ *      '<em>init_cset_rel</em>', '<em>init_cset_col</em>'
  * );</pre>
  *
  * @note This function starts an iterative algorithm. It is not an aggregate
  *       function. Source relation and column names have to be passed as strings 
  *       (due to limitations of the SQL syntax).
  *
- * @return kmeans_result Summary result set
- *
  */ 
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans( 
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans_cset( 
   src_relation      TEXT        
   , src_col_data    TEXT
   , src_col_id      TEXT
-  , init_cset_rel   TEXT
-  , init_cset_col   TEXT
+  , out_points      TEXT 
+  , out_centroids   TEXT
   , dist_metric     TEXT        
   , max_iter        INT         /*+ DEFAULT 20 */
   , conv_threshold  FLOAT       /*+ DEFAULT 0.001 */
   , evaluate        BOOLEAN     /*+ DEFAULT True */
-  , out_points      TEXT 
-  , out_centroids   TEXT
-  , overwrite       BOOLEAN     /*+ DEFAULT False */
   , verbose         BOOLEAN     /*+ DEFAULT False */
+  , init_cset_rel   TEXT
+  , init_cset_col   TEXT
 ) 
 RETURNS MADLIB_SCHEMA.kmeans_result
 AS $$
@@ -642,10 +456,11 @@ AS $$
         MADlibSchema
         , src_relation, src_col_data, src_col_id
         , init_cset_rel, init_cset_col
-        , None, None, None, None, None
+        , None, None        # init_method, sample_frac
+        , None, None, None  # k, t1, t2
         , dist_metric
         , max_iter, conv_threshold, evaluate
-        , out_points, out_centroids, overwrite
+        , out_points, out_centroids
         , verbose
     );
 
@@ -659,74 +474,69 @@ $$ LANGUAGE plpythonu;
  *
  * @param src_relation Name of the relation containing input data 
  * @param src_col_data Name of the column containing the point coordinates 
- *        (acceptable types: SVEC, INTEGER[], FLOAT[])
+ *        (acceptable types: <tt>\ref grp_svec "SVEC"</tt>, <tt>INTEGER[]</tt>,
+ *        <tt>FLOAT[]</tt>)
  * @param src_col_id Name of the column containing the unique point identifiers 
  *        (optional)
- * @param init_method Centroid seeding method, available options: random, kmeans++.
- * @param init_sample_pct Sample size for kmeans++ seeding.
- * @param k Number of initial centroids to be generated.
- * @param dist_metric Name of the metric to use for distance calculation, 
- *        available options are: euclidean/l2norm, manhattan/l1norm, cosine,
- *        tanimoto
- * @param max_iter Maximum number of iterations 
- * @param conv_threshold Convergence threshold expressed as percentage of points
- *        that changed centroid assignment
- * @param evaluate Calculate model evaluation coefficient (BOOLEAN)
  * @param out_points Name of the output relation for point/centroids assignments
  * @param out_centroids Name of the output relation for the list of centroids 
- * @param overwrite Overwrite target relations if they exist (BOOLEAN)
- * @param verbose Generate detailed information during execution (BOOLEAN)
+ * @param dist_metric Name of the metric to use for distance calculation, 
+ *        available options are: <tt>'euclidean'</tt>/<tt>'l2norm'</tt>,
+ *        <tt>'manhattan'</tt>/<tt>'l1norm'</tt>, <tt>'cosine</tt>,
+ *        <tt>'tanimoto'</tt>
+ * @param max_iter Maximum number of iterations 
+ * @param conv_threshold Convergence threshold expressed as fraction of points
+ *        that changed centroid assignment
+ * @param evaluate Calculate model evaluation coefficient
+ * @param verbose Generate detailed information during execution
+ * @param k Number of initial centroids to be generated
+ * @param sample_frac Fraction of points (between 0 and 1) to use as sample for
+ *        kmeans++ seeding.
  * 
  * @return A composite value:
  *  - <tt>src_relation TEXT</tt> - name of the source relation,
  *  - <tt>point_count BIGINT</tt> - number of analyzed data points \f$ \boldsymbol n \f$
- *  - <tt>init_method TEXT</tt> - centroid seeding method used, available values:
- *    random, kmeans++, canopy, 'provided set'
- *  - <tt>init_k INTEGER</tt> - initial number of centroids, \f$ \boldsymbol k \f$
- *  - <tt>dist_metric TEXT</tt> - distance metric used, available values:
- *    l1norm, l2norm, cosine, tanimoto
+ *  - <tt>init_method TEXT</tt> - centroid seeding method used: one of
+ *    <tt>'random'</tt>, <tt>'kmeans++'</tt>, 
+ *    <tt>'provided set'</tt>
+ *  - <tt>k INTEGER</tt> - initial number of centroids, \f$ k \f$
+ *  - <tt>dist_metric TEXT</tt> - distance metric used: one of
+ *    <tt>'l1norm'</tt>, <tt>'l2norm'</tt>, <tt>'cosine'</tt>, <tt>'tanimoto'</tt>
  *  - <tt>iterations INTEGER</tt> - number of iterations executed,
- *  - <tt>final_k INTEGER</tt> - final number of centroids, may be smaller than 
- *    initial \f$ \boldsymbol k \f$ 
  *  - <tt>cost_func FLOAT</tt> - Cost function value for the model
  *  - <tt>silhouette FLOAT</tt> - Silhouette coefficient of the full model
  *  - <tt>out_points FLOAT</tt> - name of the output relation for data points
  *  - <tt>out_centroids FLOAT</tt> - name of the output relation for centroids
-
  * 
  * @usage
  *  - Run k-means clustering with a provided centroid set:
- *    <pre>SELECT * FROM kmeans(
- *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
- *      , '<em>init_method</em>', <em>init_sample_pct</em>, <em>k</em>
- *      , '<em>dist_metric</em>', <em>max_iter</em>
- *      , <em>conv_threshold</em>, <em>evaluate</em>
- *      , '<em>out_points</em>', '<em>out_centroids</em>'
- *      , <em>overwrite</em>, <em>verbose</em>
+ *    <pre>SELECT * FROM kmeans_plusplus(
+ *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+ *      '<em>out_points</em>', '<em>out_centroids</em>',
+ *      '<em>dist_metric</em>',
+ *      <em>max_iter</em>, <em>conv_threshold</em>,
+ *      <em>evaluate</em>, <em>verbose</em>,
+ *      <em>k</em>, <em>sample_frac</em>
  * );</pre>
  *
  * @note This function starts an iterative algorithm. It is not an aggregate
  *       function. Source relation and column names have to be passed as strings 
  *       (due to limitations of the SQL syntax).
  *
- * @return kmeans_result Summary result set
- *
  */ 
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans( 
-  src_relation      TEXT
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans_plusplus( 
+  src_relation      TEXT        
   , src_col_data    TEXT
   , src_col_id      TEXT
-  , init_method     TEXT 
-  , init_sample_pct FLOAT       /*+ DEFAULT 1 */
-  , k               INT 
+  , out_points      TEXT 
+  , out_centroids   TEXT
   , dist_metric     TEXT        
   , max_iter        INT         /*+ DEFAULT 20 */
   , conv_threshold  FLOAT       /*+ DEFAULT 0.001 */
   , evaluate        BOOLEAN     /*+ DEFAULT True */
-  , out_points      TEXT 
-  , out_centroids   TEXT
-  , overwrite       BOOLEAN     /*+ DEFAULT False */
   , verbose         BOOLEAN     /*+ DEFAULT False */
+  , k               INT 
+  , sample_frac     FLOAT       /*+ DEFAULT 0.01 */
 ) 
 RETURNS MADLIB_SCHEMA.kmeans_result
 AS $$
@@ -737,11 +547,12 @@ AS $$
     return kmeans.kmeans( 
         MADlibSchema
         , src_relation, src_col_data, src_col_id
-        , None, None
-        , init_method, init_sample_pct, k
-        , None, None, dist_metric
+        , None, None    # init_cset_rel, init_cset_col
+        , 'kmeans++', sample_frac, k
+        , None, None    # t1, t2
+        , dist_metric
         , max_iter, conv_threshold, evaluate
-        , out_points, out_centroids, overwrite
+        , out_points, out_centroids
         , verbose
     );
 
@@ -755,72 +566,66 @@ $$ LANGUAGE plpythonu;
  *
  * @param src_relation Name of the relation containing input data 
  * @param src_col_data Name of the column containing the point coordinates 
- *        (acceptable types: SVEC, INTEGER[], FLOAT[])
+ *        (acceptable types: <tt>\ref grp_svec "SVEC"</tt>, <tt>INTEGER[]</tt>,
+ *        <tt>FLOAT[]</tt>)
  * @param src_col_id Name of the column containing the unique point identifiers 
  *        (optional)
- * @param init_method Centroid seeding method, available options: random, kmeans++.
- * @param k Number of initial centroids to be generated.
- * @param dist_metric Name of the metric to use for distance calculation, 
- *        available options are: euclidean/l2norm, manhattan/l1norm, cosine,
- *        tanimoto
- * @param max_iter Maximum number of iterations 
- * @param conv_threshold Convergence threshold expressed as percentage of points
- *        that changed centroid assignment
- * @param evaluate Calculate model evaluation coefficient (BOOLEAN)
  * @param out_points Name of the output relation for point/centroids assignments
  * @param out_centroids Name of the output relation for the list of centroids 
- * @param overwrite Overwrite target relations if they exist (BOOLEAN)
- * @param verbose Generate detailed information during execution (BOOLEAN)
+ * @param dist_metric Name of the metric to use for distance calculation, 
+ *        available options are: <tt>'euclidean'</tt>/<tt>'l2norm'</tt>,
+ *        <tt>'manhattan'</tt>/<tt>'l1norm'</tt>, <tt>'cosine</tt>,
+ *        <tt>'tanimoto'</tt>
+ * @param max_iter Maximum number of iterations 
+ * @param conv_threshold Convergence threshold expressed as fraction of points
+ *        that changed centroid assignment
+ * @param evaluate Calculate model evaluation coefficient
+ * @param verbose Generate detailed information during execution
+ * @param k Number of initial centroids to be generated
  * 
  * @return A composite value:
  *  - <tt>src_relation TEXT</tt> - name of the source relation,
  *  - <tt>point_count BIGINT</tt> - number of analyzed data points \f$ \boldsymbol n \f$
- *  - <tt>init_method TEXT</tt> - centroid seeding method used, available values:
- *    random, kmeans++, canopy, 'provided set'
- *  - <tt>init_k INTEGER</tt> - initial number of centroids, \f$ \boldsymbol k \f$
- *  - <tt>dist_metric TEXT</tt> - distance metric used, available values:
- *    l1norm, l2norm, cosine, tanimoto
+ *  - <tt>init_method TEXT</tt> - centroid seeding method used: one of
+ *    <tt>'random'</tt>, <tt>'kmeans++'</tt>, 
+ *    <tt>'provided set'</tt>
+ *  - <tt>k INTEGER</tt> - initial number of centroids, \f$ k \f$
+ *  - <tt>dist_metric TEXT</tt> - distance metric used: one of
+ *    <tt>'l1norm'</tt>, <tt>'l2norm'</tt>, <tt>'cosine'</tt>, <tt>'tanimoto'</tt>
  *  - <tt>iterations INTEGER</tt> - number of iterations executed,
- *  - <tt>final_k INTEGER</tt> - final number of centroids, may be smaller than 
- *    initial \f$ \boldsymbol k \f$ 
  *  - <tt>cost_func FLOAT</tt> - Cost function value for the model
  *  - <tt>silhouette FLOAT</tt> - Silhouette coefficient of the full model
  *  - <tt>out_points FLOAT</tt> - name of the output relation for data points
  *  - <tt>out_centroids FLOAT</tt> - name of the output relation for centroids
-
  * 
  * @usage
- *  - Run k-means clustering with a provided centroid set:
- *    <pre>SELECT * FROM kmeans(
- *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
- *      , '<em>init_method</em>', <em>k</em>
- *      , '<em>dist_metric</em>', <em>max_iter</em>
- *      , <em>conv_threshold</em>, <em>evaluate</em>
- *      , '<em>out_points</em>', '<em>out_centroids</em>'
- *      , <em>overwrite</em>, <em>verbose</em>
+ *  - Run k-means clustering using random centroid initialization:
+ *    <pre>SELECT * FROM kmeans_random(
+ *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+ *      '<em>out_points</em>', '<em>out_centroids</em>',
+ *      '<em>dist_metric</em>',
+ *      <em>max_iter</em>, <em>conv_threshold</em>,
+ *      <em>evaluate</em>, <em>verbose</em>,
+ *      <em>k</em>
  * );</pre>
  *
  * @note This function starts an iterative algorithm. It is not an aggregate
  *       function. Source relation and column names have to be passed as strings 
  *       (due to limitations of the SQL syntax).
  *
- * @return kmeans_result Summary result set
- *
  */ 
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans( 
-  src_relation      TEXT
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans_random( 
+  src_relation      TEXT        
   , src_col_data    TEXT
   , src_col_id      TEXT
-  , init_method     TEXT 
-  , k               INT 
+  , out_points      TEXT 
+  , out_centroids   TEXT
   , dist_metric     TEXT        
   , max_iter        INT         /*+ DEFAULT 20 */
   , conv_threshold  FLOAT       /*+ DEFAULT 0.001 */
   , evaluate        BOOLEAN     /*+ DEFAULT True */
-  , out_points      TEXT 
-  , out_centroids   TEXT
-  , overwrite       BOOLEAN     /*+ DEFAULT False */
   , verbose         BOOLEAN     /*+ DEFAULT False */
+  , k               INT 
 ) 
 RETURNS MADLIB_SCHEMA.kmeans_result
 AS $$
@@ -831,17 +636,21 @@ AS $$
     return kmeans.kmeans( 
         MADlibSchema
         , src_relation, src_col_data, src_col_id
-        , None, None
-        , init_method, None, k
-        , None, None, dist_metric
+        , None, None    # init_cset_rel, init_cset_col
+        , 'random'
+        , None          # sample_frac
+        , k
+        , None, None    # t1, t2
+        , dist_metric
         , max_iter, conv_threshold, evaluate
-        , out_points, out_centroids, overwrite
+        , out_points, out_centroids
         , verbose
     );    
 
 $$ LANGUAGE plpythonu;
 
 /**
+ * @internal
  * @brief Computes k-means clustering using canopy for centroid seeding.  
  * 
  * For k-means clustering with user provided initial centroid set and for other
@@ -849,75 +658,68 @@ $$ LANGUAGE plpythonu;
  *
  * @param src_relation Name of the relation containing input data 
  * @param src_col_data Name of the column containing the point coordinates 
- *        (acceptable types: SVEC, INTEGER[], FLOAT[])
+ *        (acceptable types: <tt>\ref grp_svec "SVEC"</tt>, <tt>INTEGER[]</tt>,
+ *        <tt>FLOAT[]</tt>)
  * @param src_col_id Name of the column containing the unique point identifiers 
  *        (optional)
- * @param init_method Centroid seeding method, available options: canopy.
- * @param init_sample_pct Sample size for kmeans++ seeding.
- * @param t1 Lower threshold for the canopy seeding (optional).
- * @param t2 Higher threshold for the canopy seeding (optional).
- * @param dist_metric Name of the metric to use for distance calculation, 
- *        available options are: euclidean/l2norm, manhattan/l1norm, cosine,
- *        tanimoto
- * @param max_iter Maximum number of iterations 
- * @param conv_threshold Convergence threshold expressed as percentage of points
- *        that changed centroid assignment
- * @param evaluate Calculate model evaluation coefficient (BOOLEAN)
  * @param out_points Name of the output relation for point/centroids assignments
  * @param out_centroids Name of the output relation for the list of centroids 
- * @param overwrite Overwrite target relations if they exist (BOOLEAN)
- * @param verbose Generate detailed information during execution (BOOLEAN)
+ * @param dist_metric Name of the metric to use for distance calculation, 
+ *        available options are: <tt>'euclidean'</tt>/<tt>'l2norm'</tt>,
+ *        <tt>'manhattan'</tt>/<tt>'l1norm'</tt>, <tt>'cosine</tt>,
+ *        <tt>'tanimoto'</tt>
+ * @param max_iter Maximum number of iterations 
+ * @param conv_threshold Convergence threshold expressed as fraction of points
+ *        that changed centroid assignment
+ * @param evaluate Calculate model evaluation coefficient
+ * @param verbose Generate detailed information during execution
+ * @param t1 Larger threshold for the canopy seeding (optional).
+ * @param t2 Smaller threshold for the canopy seeding (optional).
  * 
  * @return A composite value:
  *  - <tt>src_relation TEXT</tt> - name of the source relation,
  *  - <tt>point_count BIGINT</tt> - number of analyzed data points \f$ \boldsymbol n \f$
- *  - <tt>init_method TEXT</tt> - centroid seeding method used, available values:
- *    random, kmeans++, canopy, 'provided set'
- *  - <tt>init_k INTEGER</tt> - initial number of centroids, \f$ \boldsymbol k \f$
- *  - <tt>dist_metric TEXT</tt> - distance metric used, available values:
- *    l1norm, l2norm, cosine, tanimoto
+ *  - <tt>init_method TEXT</tt> - centroid seeding method used: one of
+ *    <tt>'random'</tt>, <tt>'kmeans++'</tt>, <tt>'canopy'</tt>,
+ *    <tt>'provided set'</tt>
+ *  - <tt>k INTEGER</tt> - initial number of centroids, \f$ k \f$
+ *  - <tt>dist_metric TEXT</tt> - distance metric used: one of
+ *    <tt>'l1norm'</tt>, <tt>'l2norm'</tt>, <tt>'cosine'</tt>, <tt>'tanimoto'</tt>
  *  - <tt>iterations INTEGER</tt> - number of iterations executed,
- *  - <tt>final_k INTEGER</tt> - final number of centroids, may be smaller than 
- *    initial \f$ \boldsymbol k \f$ 
  *  - <tt>cost_func FLOAT</tt> - Cost function value for the model
  *  - <tt>silhouette FLOAT</tt> - Silhouette coefficient of the full model
  *  - <tt>out_points FLOAT</tt> - name of the output relation for data points
  *  - <tt>out_centroids FLOAT</tt> - name of the output relation for centroids
  * 
  * @usage
- *  - Run k-means clustering with a provided centroid set:
- *    <pre>SELECT * FROM kmeans(
- *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>'
- *      , '<em>init_method</em>', <em>t1</em>, <em>t2</em>
- *      , '<em>dist_metric</em>', <em>max_iter</em>
- *      , <em>conv_threshold</em>, <em>evaluate</em>
- *      , '<em>out_points</em>', '<em>out_centroids</em>'
- *      , <em>overwrite</em>, <em>verbose</em>
+ *  - Run k-means clustering using canopy clustering for the centroid seeding:
+ *    <pre>SELECT * FROM kmeans_canopy(
+ *      '<em>src_relation</em>', '<em>src_col_data</em>', '<em>src_col_id</em>',
+ *      '<em>out_points</em>', '<em>out_centroids</em>',
+ *      '<em>dist_metric</em>',
+ *      <em>max_iter</em>, <em>conv_threshold</em>,
+ *      <em>evaluate</em>, <em>verbose</em>,
+ *      <em>t1</em>, <em>t2</em>
  * );</pre>
  *
  * @note This function starts an iterative algorithm. It is not an aggregate
  *       function. Source relation and column names have to be passed as strings 
  *       (due to limitations of the SQL syntax).
  *
- * @return kmeans_result Summary result set
- *
  */ 
-CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans( 
-  src_relation      TEXT
+CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans_canopy( 
+  src_relation      TEXT        
   , src_col_data    TEXT
   , src_col_id      TEXT
-  , init_method     TEXT 
-  , init_sample_pct FLOAT       /*+ DEFAULT 1 */
-  , t1              FLOAT 
-  , t2              FLOAT 
+  , out_points      TEXT 
+  , out_centroids   TEXT
   , dist_metric     TEXT        
   , max_iter        INT         /*+ DEFAULT 20 */
   , conv_threshold  FLOAT       /*+ DEFAULT 0.001 */
   , evaluate        BOOLEAN     /*+ DEFAULT True */
-  , out_points      TEXT 
-  , out_centroids   TEXT
-  , overwrite       BOOLEAN     /*+ DEFAULT False */
   , verbose         BOOLEAN     /*+ DEFAULT False */
+  , t1              FLOAT 
+  , t2              FLOAT 
 ) 
 RETURNS MADLIB_SCHEMA.kmeans_result
 AS $$
@@ -928,17 +730,20 @@ AS $$
     return kmeans.kmeans( 
         MADlibSchema
         , src_relation, src_col_data, src_col_id
-        , None, None
-        , init_method, init_sample_pct, None, t1, t2
+        , None, None    # init_cset_rel, init_cset_col
+        , 'canopy'
+        , None, None    # sample_frac, k
+        , t1, t2
         , dist_metric
         , max_iter, conv_threshold, evaluate
-        , out_points, out_centroids, overwrite
+        , out_points, out_centroids
         , verbose
     );
 
 $$ LANGUAGE plpythonu;
 
 /**
+ * @internal
  * @brief Generates sample random data for k-means clustering.  
  * 
  * For k-means clustering with user provided initial centroid set see the other 
@@ -961,7 +766,8 @@ $$ LANGUAGE plpythonu;
  *      , '<em>outrel</em>'
  * );</pre>
  *
- */ 
+ */
+-- FIXME: I (Florian) don't think this function should become part of the API as is
 CREATE OR REPLACE FUNCTION MADLIB_SCHEMA.kmeans_sample_data( 
     dim     INTEGER,
     k       INTEGER,
