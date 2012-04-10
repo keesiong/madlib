@@ -29,6 +29,7 @@ PG_MODULE_MAGIC;
 #endif
 
 /* Indicate "version 1" calling conventions for all exported functions. */
+PG_FUNCTION_INFO_V1(topicAssignment);
 PG_FUNCTION_INFO_V1(sampleNewTopics);
 PG_FUNCTION_INFO_V1(randomTopics);
 PG_FUNCTION_INFO_V1(zero_array);
@@ -409,4 +410,37 @@ Datum randomTopics(PG_FUNCTION_ARGS)
 				format_procedure(fcinfo->flinfo->fn_oid))));
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(ret));
+}
+
+Datum topicAssignment(PG_FUNCTION_ARGS);
+Datum topicAssignment(PG_FUNCTION_ARGS) 
+{
+	int i, j, widx, wtcount;
+
+	ArrayType * doc_arr = PG_GETARG_ARRAYTYPE_P(0);
+	ArrayType * global_count_arr = PG_GETARG_ARRAYTYPE_P(1);
+	int32 num_topics = PG_GETARG_INT32(2);
+
+	// the document array
+	int32 * doc = (int32 *)ARR_DATA_PTR(doc_arr);
+	int32 len = ARR_DIMS(doc_arr)[0];
+
+	// the word-topic count matrix
+	int32 * global_count = (int32 *)ARR_DATA_PTR(global_count_arr);
+
+	Datum * arr = palloc0(num_topics * sizeof(float8));
+	ArrayType * ret_arr = construct_array(arr,num_topics,FLOAT8OID,8,true,'d');
+	float8 * ret = (float8 *)ARR_DATA_PTR(ret_arr);
+
+	for (i=0; i!=len; i++) {
+		widx = doc[i]-1;
+		wtcount = 0;
+		for (j=0; j!=num_topics; j++)
+			wtcount += global_count[widx * num_topics + j];
+		
+		for (j=0; j!=num_topics; j++)
+			ret[j] += global_count[widx * num_topics + j]*1.0 / wtcount;
+	}
+
+	PG_RETURN_ARRAYTYPE_P(ret_arr);
 }
